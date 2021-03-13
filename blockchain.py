@@ -11,8 +11,8 @@ class Blockchain:
     def __init__(self):
         self.chain = []
         self.mempool = []
-        self.create_block(proof = 1, previous_hash = '0')
         self.nodes = set()
+        self.create_block(proof = 1, previous_hash = '0')
         
     def create_block(self, proof, previous_hash):
         block = {'index': len(self.chain) + 1,
@@ -22,14 +22,23 @@ class Blockchain:
                  'transactions': self.mempool}
         self.mempool = []
         self.chain.append(block)
+        if self.replace_chain():
+            raise Exception('Houston, we have a bigger chain')   
         return block
     
-    def create_transaction(self, sender, receiver, amount):
-        transaction = {'timestamp': str(datetime.datetime.now()),
+    
+    def create_transaction(self, sender, receiver, amount, timestamp):
+        should_broadcast = False
+        if not timestamp:
+            timestamp = str(datetime.datetime.now())
+            should_broadcast = True
+        transaction = {'timestamp': timestamp,
                  'sender': sender,
                  'receiver': receiver,
                  'amount': amount}
         self.mempool.append(transaction)
+        if should_broadcast:
+            self.broadcast_transaction(transaction)
         return self.get_previous_block()['index'] + 1
     
     def create_node(self, address):
@@ -86,6 +95,14 @@ class Blockchain:
             return True
         return False
     
+    def broadcast_transaction(self, transaction):
+        result = True
+        for node in self.nodes:
+            response = requests.post(f'http://{node}/chain/transaction', json = transaction)
+            if response.status_code != 201:
+                result = False
+        return result
+    
 app = Flask(__name__)
 
 blockchain = Blockchain()
@@ -94,7 +111,10 @@ blockchain = Blockchain()
 def mine_block():
     previous_block = blockchain.get_previous_block()
     proof = blockchain.proof_of_work(previous_block['proof'])
-    block = blockchain.create_block(proof, blockchain.hash(previous_block))
+    try:
+        block = blockchain.create_block(proof, blockchain.hash(previous_block))
+    except Exception as e:
+        return str(e), 409
     response = {'block': block}
     return jsonify(response), 200
  
@@ -113,9 +133,14 @@ def is_valid():
 def post_transaction():
     transaction_keys = ['sender', 'receiver', 'amount']
     json = request.get_json()
+    print("JSON: " + str(json))
     if not all (key in json for key in transaction_keys):
         return 'Houston, we have a problem', 400
-    return jsonify(blockchain.create_transaction(json['sender'], json['receiver'], json['amount'])), 201
+    sender = json['sender']
+    receiver = json['receiver']
+    amount = json['amount']
+    timestamp = json['timestamp'] if 'timestamp' in json else ''
+    return jsonify(blockchain.create_transaction(sender, receiver, amount, timestamp)), 201
 
 @app.route('/chain/nodes', methods = ['POST'])
 def post_node():
